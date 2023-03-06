@@ -1487,7 +1487,7 @@ class Form
 					}
 
 					if (!empty($conf->global->SOCIETE_SHOW_VAT_IN_LIST) && !empty($obj->tva_intra)) {
-						$label .= ' - '.$obj->tva_intra.'';
+						$label .= ' - '.$obj->tva_intra;
 					}
 
 					$labelhtml = $label;
@@ -4127,7 +4127,7 @@ class Form
 	public function select_conditions_paiements($selected = 0, $htmlname = 'condid', $filtertype = -1, $addempty = 0, $noinfoadmin = 0, $morecss = '', $deposit_percent = -1)
 	{
 		// phpcs:enable
-		print $this->getSelectConditionsPaiements($selected, $htmlname, $filtertype, $addempty, $noinfoadmin, $morecss, $deposit_percent = -1);
+		print $this->getSelectConditionsPaiements($selected, $htmlname, $filtertype, $addempty, $noinfoadmin, $morecss, $deposit_percent);
 	}
 
 
@@ -7769,40 +7769,6 @@ class Form
 		return $out;
 	}
 
-	/**
-	 * Function to forge a SQL criteria from a Dolibarr filter syntax string.
-	 *
-	 * @param  array    $matches       Array of found string by regex search. Example: "t.ref:like:'SO-%'" or "t.date_creation:<:'20160101'" or "t.nature:is:NULL"
-	 * @return string                  Forged criteria. Example: "t.field like 'abc%'"
-	 */
-	protected static function forgeCriteriaCallback($matches)
-	{
-		global $db;
-
-		//dol_syslog("Convert matches ".$matches[1]);
-		if (empty($matches[1])) {
-			return '';
-		}
-		$tmp = explode(':', $matches[1]);
-		if (count($tmp) < 3) {
-			return '';
-		}
-
-		$tmpescaped = $tmp[2];
-		$regbis = array();
-
-		if (preg_match('/^\'(.*)\'$/', $tmpescaped, $regbis)) {
-			$tmpescaped = "'".$db->escape($regbis[1])."'";
-		} else {
-			$tmpescaped = $db->escape($tmpescaped);
-		}
-
-		if ($tmp[1] == '!=') {
-			$tmp[1] = '<>';
-		}
-
-		return $db->escape($tmp[0]).' '.strtoupper($db->escape($tmp[1]))." ".$tmpescaped;
-	}
 
 	/**
 	 * Output html form to select an object.
@@ -7916,12 +7882,11 @@ class Form
 			}
 
 			if ($filter) {	 // Syntax example "(t.ref:like:'SO-%') and (t.date_creation:<:'20160101')"
-				/*if (! DolibarrApi::_checkFilters($filter))
-				{
-					throw new RestException(503, 'Error when validating parameter sqlfilters '.$filter);
-				}*/
-				$regexstring = '\(([^:\'\(\)]+:[^:\'\(\)]+:[^\(\)]+)\)';
-				$sql .= " AND (".preg_replace_callback('/'.$regexstring.'/', 'Form::forgeCriteriaCallback', $filter).")";
+				$errormessage = '';
+				$sql .= forgeSQLFromUniversalSearchCriteria($filter, $errormessage);
+				if ($errormessage) {
+					return 'Error forging a SQL request from an universal criteria: '.$errormessage;
+				}
 			}
 		}
 		$sql .= $this->db->order($sortfield ? $sortfield : $fieldstoshow, "ASC");
@@ -8897,8 +8862,7 @@ class Form
 					'perms'=>1,
 					'label'=>'LinkToContract',
 					'sql'=>"SELECT s.rowid as socid, s.nom as name, s.client, t.rowid, t.ref, t.ref_customer as ref_client, t.ref_supplier, SUM(td.total_ht) as total_ht
-							FROM ".$this->db->prefix()."societe as s, ".$this->db->prefix()."contrat as t, ".$this->db->prefix()."contratdet as td WHERE t.fk_soc = s.rowid AND td.fk_contrat = t.rowid AND t.fk_soc IN (".$this->db->sanitize($listofidcompanytoscan).') AND t.entity IN ('.getEntity('contract').') GROUP BY s.rowid, s.nom, s.client, t.rowid, t.ref, t.ref_customer, t.ref_supplier'
-				),
+							FROM ".$this->db->prefix()."societe as s, ".$this->db->prefix()."contrat as t, ".$this->db->prefix()."contratdet as td WHERE t.fk_soc = s.rowid AND td.fk_contrat = t.rowid AND t.fk_soc IN (".$this->db->sanitize($listofidcompanytoscan).') AND t.entity IN ('.getEntity('contract').') GROUP BY s.rowid, s.nom, s.client, t.rowid, t.ref, t.ref_customer, t.ref_supplier'),
 				'fichinter'=>array(
 					'enabled'=>isModEnabled('ficheinter'),
 					'perms'=>1,
@@ -8929,6 +8893,12 @@ class Form
 					'label'=>'LinkToMo',
 					'sql'=>"SELECT s.rowid as socid, s.nom as name, s.client, t.rowid, t.ref, t.rowid, '0' as total_ht FROM ".$this->db->prefix()."societe as s INNER JOIN ".$this->db->prefix()."mrp_mo as t ON t.fk_soc = s.rowid  WHERE  t.fk_soc IN (".$this->db->sanitize($listofidcompanytoscan).') AND t.entity IN ('.getEntity('mo').')')
 			);
+		}
+
+		if ($object->table_element == 'commande_fournisseur') {
+			$possiblelinks['mo']['sql'] = "SELECT s.rowid as socid, s.nom as name, s.client, t.rowid, t.ref, t.rowid, '0' as total_ht FROM ".$this->db->prefix()."societe as s INNER JOIN ".$this->db->prefix().'mrp_mo as t ON t.fk_soc = s.rowid  WHERE t.entity IN ('.getEntity('mo').')';
+		} elseif ($object->table_element == 'mrp_mo') {
+			$possiblelinks['order_supplier']['sql'] = "SELECT s.rowid as socid, s.nom as name, s.client, t.rowid, t.ref, t.ref_supplier, t.total_ht FROM ".$this->db->prefix()."societe as s, ".$this->db->prefix().'commande_fournisseur as t WHERE t.fk_soc = s.rowid AND t.entity IN ('.getEntity('commande_fournisseur').')';
 		}
 
 		if (!empty($listofidcompanytoscan)) {  // If empty, we don't have criteria to scan the object we can link to
@@ -10275,14 +10245,12 @@ class Form
 				$search_component_params_hidden .= '('.$search_component_params_hidden.')';
 			}
 			$errormessage = '';
-			if (!dolCheckFilters($search_component_params_hidden, $errormessage)) {
-				print 'ERROR in parsing search string';
+			$searchtags = forgeSQLFromUniversalSearchCriteria($search_component_params_hidden, $errormessage);
+			if ($errormessage) {
+				print 'ERROR in parsing search string: '.dol_escape_htmltag($errormessage);
 			}
-			$regexstring = '\(([^:\'\(\)]+:[^:\'\(\)]+:[^\(\)]+)\)';
-			//var_dump($search_component_params_hidden);
-			$htmltags = preg_replace_callback('/'.$regexstring.'/', 'dolForgeCriteriaCallback', $search_component_params_hidden);
-			//var_dump($htmltags);
-			$ret .= '<span class="marginleftonlyshort valignmiddle tagsearch"><span class="tagsearchdelete select2-selection__choice__remove">x</span> '.$htmltags.'</span>';
+			//var_dump($searchtags);
+			$ret .= '<span class="marginleftonlyshort valignmiddle tagsearch"><span class="tagsearchdelete select2-selection__choice__remove">x</span> '.dol_escape_htmltag($searchtags).'</span>';
 		}
 
 		//$ret .= '<button type="submit" class="liste_titre button_search paddingleftonly" name="button_search_x" value="x"><span class="fa fa-search"></span></button>';
