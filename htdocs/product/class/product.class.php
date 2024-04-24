@@ -3408,7 +3408,7 @@ class Product extends CommonObject
 			while ($obj = $this->db->fetch_object($result)) {
 				/** DEB : BACKPORT STANDARD PR28879**/
 				if ($obj->role == 'toconsume' && empty($warehouseid)) {
-				/** FIN : BACKPORT STANDARD PR28879 **/
+					/** FIN : BACKPORT STANDARD PR28879 **/
 					$this->stats_mrptoconsume['customers'] += $obj->nb_customers;
 					$this->stats_mrptoconsume['nb'] += $obj->nb;
 					$this->stats_mrptoconsume['rows'] += $obj->nb_rows;
@@ -3416,7 +3416,7 @@ class Product extends CommonObject
 				}
 				/** DEB : BACKPORT STANDARD PR28879 **/
 				if ($obj->role == 'consumed' && empty($warehouseid)) {
-				/** FIN : BACKPORT STANDARD PR28879 **/
+					/** FIN : BACKPORT STANDARD PR28879 **/
 					//$this->stats_mrptoconsume['customers'] += $obj->nb_customers;
 					//$this->stats_mrptoconsume['nb'] += $obj->nb;
 					//$this->stats_mrptoconsume['rows'] += $obj->nb_rows;
@@ -5521,6 +5521,25 @@ class Product extends CommonObject
 				$warehouseStatus[Entrepot::STATUS_OPEN_ALL] = Entrepot::STATUS_OPEN_ALL;
 			}
 		}
+
+		/* BEGIN BACKPORT DOLIBARR : DA024318 [PR](https://github.com/Dolibarr/dolibarr/pull/29396)  */
+		if (! preg_match('/novirtual/', $option)) {
+			// initialize $this->stock_warehouse for all warehouses, even those with no current physical stock because
+			// they may still have a non-zero virtual stock
+			$sql = "SELECT rowid FROM " . $this->db->prefix() . "entrepot WHERE entity IN (" . getEntity('stock') . ")";
+			$result = $this->db->query($sql);
+			if ($result) {
+				while ($obj = $this->db->fetch_object($result)) {
+					$stockWarehouse = $this->stock_warehouse[$obj->rowid] = new stdClass();
+					$stockWarehouse->id = 0;
+					$stockWarehouse->real = 0;
+					$stockWarehouse->virtual = 0;
+					$stockWarehouse->detail_batch = array();
+				}
+			}
+		}
+		/* END BACKPORT DOLIBARR : DA024318 [PR](https://github.com/Dolibarr/dolibarr/pull/29396) */
+
 
 		$sql = "SELECT ps.rowid, ps.reel, ps.fk_entrepot";
 		$sql .= " FROM ".$this->db->prefix()."product_stock as ps";
