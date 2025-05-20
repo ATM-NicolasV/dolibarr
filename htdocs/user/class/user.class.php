@@ -718,6 +718,9 @@ class User extends CommonObject
 			'mo' => 'mrp',
 			'order' => 'commande',
 			'produit' => 'product',
+			// BACKPORT de cette PR https://github.com/Dolibarr/dolibarr/pull/34212/files
+			'productlot' => 'produit',
+			// FIN BACKPORT
 			'project' => 'projet',
 			'propale' => 'propal',
 			'shipping' => 'expedition',
