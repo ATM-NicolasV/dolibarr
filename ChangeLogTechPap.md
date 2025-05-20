@@ -1,3 +1,4 @@
+- FIX : DA026352 - BACKPORT https://github.com/Dolibarr/dolibarr/pull/34212/files
 - FIX : DA024764 - Backport PR 29217 : gestion des traductions PDF sur les valeurs des extrafields - *03/04/2024*
 - FIX : DA024318 - Backport PR 28879 : gestion de la donnée "stock virtuel par entrepôt" sur l'écran de réapprovisionnement > erreur de calculs suite au dev précédent- *15/03/2024*
 - FIX : DA024318 - Backport PR 27668 : gestion de la donnée "stock virtuel par entrepôt" sur l'écran de réapprovisionnement - *12/02/2024*
