@@ -2,7 +2,7 @@
 /* Copyright (C) 2008-2011  Laurent Destailleur     <eldy@users.sourceforge.net>
  * Copyright (C) 2008-2017  Regis Houssin           <regis.houssin@inodbox.com>
  * Copyright (C) 2024		MDW						<mdeweerd@users.noreply.github.com>
- * Copyright (C) 2024		Frédéric France			<frederic.france@free.fr>
+ * Copyright (C) 2024-2026  Frédéric France			<frederic.france@free.fr>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -535,14 +535,20 @@ function getRandomPassword($generic = false, $replaceambiguouschars = null, $len
 		}
 		$generated_password = implode('', $passwordArray);
 	} elseif (getDolGlobalString('USER_PASSWORD_GENERATED')) {
-		$nomclass = "modGeneratePass".ucfirst(getDolGlobalString('USER_PASSWORD_GENERATED'));
-		$nomfichier = $nomclass.".class.php";
-		//print DOL_DOCUMENT_ROOT."/core/modules/security/generate/".$nomclass;
-		require_once DOL_DOCUMENT_ROOT."/core/modules/security/generate/".$nomfichier;
-		$genhandler = new $nomclass($db, $conf, $langs, $user);
-		'@phan-var-force ModeleGenPassword $genhandler';
-		$generated_password = $genhandler->getNewGeneratedPassword();
-		unset($genhandler);
+		require_once DOL_DOCUMENT_ROOT."/core/modules/security/generate/modules_genpassword.php";
+		$genhandler = ModeleGenPassword::loadAndInstantiate(getDolGlobalString('USER_PASSWORD_GENERATED'), $db, $conf, $langs, $user);
+		if (!$genhandler) {
+			// Configured generator class could not be resolved (e.g. the module that provided it
+			// was disabled/removed after being selected) — fall back to the always-available
+			// 'standard' generator rather than silently generating and persisting an empty password.
+			dol_syslog("getRandomPassword: generator class for USER_PASSWORD_GENERATED='".getDolGlobalString('USER_PASSWORD_GENERATED')."' not found, falling back to standard", LOG_WARNING);
+			$genhandler = ModeleGenPassword::loadAndInstantiate('standard', $db, $conf, $langs, $user);
+		}
+		if ($genhandler) {
+			'@phan-var-force ModeleGenPassword $genhandler';
+			$generated_password = $genhandler->getNewGeneratedPassword();
+			unset($genhandler);
+		}
 	}
 
 	// Do we have to discard some alphabetic characters ? (usually $replaceambiguouschars is empty)
@@ -633,4 +639,56 @@ function showEyeForField($htmlname, $htmlnameofinput)
 		});
 	});
 </script>';
+}
+
+/**
+ * Build the possession hash for a password-reset link.
+ *
+ * The hash binds the secret stored in llx_user.pass_temp to the user id and to
+ * the instance unique id, so a link is valid only for one user on one instance.
+ * The 'hash' algorithm is used on purpose: the result must be deterministic and
+ * free of characters that would be mangled once put in an URL.
+ *
+ * @param	string	$secret		Full value stored in pass_temp (see dolVerifyPasswordResetHash)
+ * @param	int		$userid		Target user rowid
+ * @return	string				Hash to put in the reset link (passworduidhash)
+ */
+function dolGetPasswordResetHash(string $secret, int $userid): string
+{
+	global $conf;
+	return dol_hash($secret.'-'.$userid.'-'.$conf->file->instance_unique_id, 'hash');
+}
+
+/**
+ * Verify a password-reset possession hash and its expiry.
+ *
+ * pass_temp value format for links armed by User::requestPasswordReset():
+ *   'r:<YYYYMMDDHHMMSS gmt>:<randomsecret>'.
+ * The hash is checked against the WHOLE value, so neither the secret nor the
+ * expiry can be altered. Legacy values without the 'r:' prefix have no expiry.
+ * Same 'hash' algorithm as dolGetPasswordResetHash() (deterministic, URL safe).
+ *
+ * @param	?string	$secret			Full value read from pass_temp (null when no reset is pending)
+ * @param	int		$userid			Target user rowid
+ * @param	string	$hashtotest		Hash received from the reset link
+ * @return	int						1 if valid, 0 if bad possession, -1 if expired
+ */
+function dolVerifyPasswordResetHash(?string $secret, int $userid, string $hashtotest): int
+{
+	global $conf;
+
+	if ($secret === null || $secret === '' || $hashtotest === '') {
+		return 0;
+	}
+	if (!dol_verifyHash($secret.'-'.$userid.'-'.$conf->file->instance_unique_id, $hashtotest, 'hash')) {
+		return 0;
+	}
+	$reg = array();
+	if (preg_match('/^r:(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}):/', $secret, $reg)) {
+		$maxdate = dol_mktime((int) $reg[4], (int) $reg[5], (int) $reg[6], (int) $reg[2], (int) $reg[3], (int) $reg[1], 'gmt');
+		if ($maxdate && $maxdate < dol_now()) {
+			return -1;
+		}
+	}
+	return 1;
 }

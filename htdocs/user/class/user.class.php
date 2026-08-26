@@ -12,10 +12,11 @@
  * Copyright (C) 2015		Marcos García			<marcosgdf@gmail.com>
  * Copyright (C) 2018		charlene Benke			<charlie@patas-monkey.com>
  * Copyright (C) 2018-2021	Nicolas ZABOURI			<info@inovea-conseil.com>
- * Copyright (C) 2019-2025  Frédéric France			<frederic.france@free.fr>
+ * Copyright (C) 2019-2026  Frédéric France			<frederic.france@free.fr>
  * Copyright (C) 2019		Abbes Bahfir			<dolipar@dolipar.org>
  * Copyright (C) 2024-2026	MDW						<mdeweerd@users.noreply.github.com>
  * Copyright (C) 2024		Lenin Rivas				<lenin.rivas777@gmail.com>
+ * Copyright (C) 2026		Anthony Berton			<anthony.berton@bb2a.fr>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,6 +39,7 @@
  */
 
 require_once DOL_DOCUMENT_ROOT.'/core/lib/security.lib.php';
+require_once DOL_DOCUMENT_ROOT.'/core/lib/security2.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/commonobject.class.php';
 require_once DOL_DOCUMENT_ROOT.'/user/class/usergroup.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/commonpeople.class.php';
@@ -457,7 +459,8 @@ class User extends CommonObject
 	public $default_range;
 
 	/**
-	 *@var ?int id of warehouse
+	 * @var ?int id of warehouse
+	 * @deprecated use $warehouse_id
 	 */
 	public $fk_warehouse;
 
@@ -481,6 +484,7 @@ class User extends CommonObject
 		'rowid' => array('type' => 'integer', 'label' => 'TechnicalID', 'enabled' => 1, 'visible' => -2, 'notnull' => 1, 'index' => 1, 'position' => 1, 'comment' => 'Id'),
 		'lastname' => array('type' => 'varchar(50)', 'label' => 'Lastname', 'enabled' => 1, 'visible' => 1, 'notnull' => 1, 'showoncombobox' => 1, 'index' => 1, 'position' => 20, 'searchall' => 1),
 		'firstname' => array('type' => 'varchar(50)', 'label' => 'Firstname', 'enabled' => 1, 'visible' => 1, 'notnull' => 1, 'showoncombobox' => 1, 'index' => 1, 'position' => 10, 'searchall' => 1),
+		'fk_warehouse' => array('type' => 'integer:Entrepot:product\stock\class\entrepot.class.php', 'label' => 'Warehouse', 'enabled' => "isModEnabled('stock')", 'visible' => 1, 'notnull' => 0, 'showoncombobox' => 1, 'index' => 1, 'position' => 50, 'searchall' => 1),
 		'ref_employee' => array('type' => 'varchar(50)', 'label' => 'RefEmployee', 'enabled' => 1, 'visible' => 1, 'notnull' => 1, 'showoncombobox' => 1, 'index' => 1, 'position' => 30, 'searchall' => 1),
 		'national_registration_number' => array('type' => 'varchar(50)', 'label' => 'NationalRegistrationNumber', 'enabled' => 1, 'visible' => 1, 'notnull' => 1, 'showoncombobox' => 1, 'index' => 1, 'position' => 40, 'searchall' => 1)
 	);
@@ -604,14 +608,14 @@ class User extends CommonObject
 					if ($entity != '' && $entity == 0) {    // If $entity = 0
 						$sql .= " WHERE u.entity = 0";
 					} else {                                // if $entity is -1 or > 0
-						$sql .= " WHERE u.entity IN (0, " . ((int) ($entity > 0 ? $entity : $conf->entity)) . ")";
+						$sql .= " WHERE u.entity IN (0, " . ((int) ($entity > 0 ? ((int) $entity) : ((int) $conf->entity))) . ")";
 					}
 				}
 			}
 		}
 
 		if ($sid) {
-			// permet une recherche du user par son SID ActiveDirectory ou Samba
+			// allows searching for the user by their ActiveDirectory or Samba SID
 			$sql .= " AND (u.ldap_sid = '".$this->db->escape($sid)."' OR u.login = '".$this->db->escape($login)."')";
 		} elseif ($login) {
 			$sql .= " AND u.login = '".$this->db->escape($login)."'";
@@ -628,7 +632,7 @@ class User extends CommonObject
 		$sql .= " ORDER BY u.entity ASC"; // Avoid random result when there is 2 login in 2 different entities
 
 		if ($sid) {
-			// permet une recherche du user par son SID ActiveDirectory ou Samba
+			// allows searching for the user by their ActiveDirectory or Samba SID
 			$sql .= ' '.$this->db->plimit(1);
 		}
 
@@ -739,6 +743,8 @@ class User extends CommonObject
 				$this->default_range = $obj->default_range;
 				$this->default_c_exp_tax_cat = $obj->default_c_exp_tax_cat;
 				$this->fk_warehouse = $obj->fk_warehouse;
+				$this->warehouse_id = $obj->fk_warehouse; // To avoid that some code use $user->warehouse when it is not loaded. It must be loaded with $user->fetch_warehouse() before.
+				$this->warehouse = null; // To avoid that some code use $user->warehouse when it is not loaded. It must be loaded with $user->fetch_warehouse() before.
 				$this->fk_establishment = $obj->fk_establishment;
 				$this->label_establishment = $obj->label_establishment;
 
@@ -748,6 +754,10 @@ class User extends CommonObject
 					$this->entity = 0;
 				}
 
+				// If user is linked to a warehouse, we load it into memory
+				if (isModEnabled('stock') && getDolGlobalString('MAIN_DEFAULT_WAREHOUSE_USER') && (!empty($this->fk_warehouse) || !empty($this->warehouse_id))) {
+					$this->fetchWarehouse();
+				}
 				// Retrieve all extrafield
 				// fetch optionals attributes and labels
 				$this->fetch_optionals();
@@ -1258,7 +1268,7 @@ class User extends CommonObject
 			$module = $perms = $subperms = '';
 
 			// When the request is to delete a specific permissions, this gets the
-			// les charactis for the module, permissions and sub-permission of this permission.
+			// characteristics for the module, permissions and sub-permission of this permission.
 			$sql = "SELECT module, perms, subperms";
 			$sql .= " FROM ".$this->db->prefix()."rights_def";
 			$sql .= " WHERE id = ".((int) $rid);
@@ -1419,7 +1429,7 @@ class User extends CommonObject
 				// @FIXME Test on MULTICOMPANY_BACKWARD_COMPATIBILITY is a very strange business rules because the select should be always the
 				// same than into user->loadRights() in user/perms.php and user/group/perms.php
 				// We should never use and remove this case.
-				$sql .= " AND r.entity IN (0,".(isModEnabled('multicompany') && getDolGlobalString('MULTICOMPANY_TRANSVERSE_MODE') ? "1," : "").$conf->entity.")";
+				$sql .= " AND r.entity IN (0,".(isModEnabled('multicompany') && getDolGlobalString('MULTICOMPANY_TRANSVERSE_MODE') ? "1," : "").((int) $conf->entity).")";
 			} else {
 				// On table r=rights_def, the unique key is (id, entity) because id is hard coded into module descriptor and inserted during module activation.
 				// So we must include the filter on entity on both table r. and ur.
@@ -1484,7 +1494,7 @@ class User extends CommonObject
 				// same than into user->loadRights() in user/perms.php and user/group/perms.php
 				// We should never use and remove this case.
 				if (isModEnabled('multicompany') && getDolGlobalString('MULTICOMPANY_TRANSVERSE_MODE')) {
-					$sql .= " AND gu.entity IN (0,".$conf->entity.")";
+					$sql .= " AND gu.entity IN (0,".((int) $conf->entity).")";
 				} else {
 					$sql .= " AND r.entity = ".((int) $conf->entity);
 				}
@@ -1493,7 +1503,7 @@ class User extends CommonObject
 				// The entity on the table gu=usergroup_user should be useless and should never be used because it is already into gr and r.
 				// but when using MULTICOMPANY_TRANSVERSE_MODE, we may have inserted record that make rubbish result here due to the duplicate record of
 				// other entities, so we are forced to add a filter on gu here
-				$sql .= " AND gu.entity IN (0,".$conf->entity.")";
+				$sql .= " AND gu.entity IN (0,".((int) $conf->entity).")";
 				$sql .= " AND r.entity = ".((int) $conf->entity);	// Only permission of modules enabled in current entity
 			}
 			// End of strange business rule
@@ -2195,10 +2205,10 @@ class User extends CommonObject
 		}
 		$i = 0;
 		while ($i < $num) {
-			$sql = "DELETE FROM ".$this->db->prefix()."user_rights WHERE fk_user = $this->id AND fk_id=$rd[$i]";
+			$sql = "DELETE FROM ".$this->db->prefix()."user_rights WHERE fk_user = ".((int) $this->id)." AND fk_id=".((int) $rd[$i]);
 			$result = $this->db->query($sql);
 
-			$sql = "INSERT INTO ".$this->db->prefix()."user_rights (fk_user, fk_id) VALUES ($this->id, $rd[$i])";
+			$sql = "INSERT INTO ".$this->db->prefix()."user_rights (fk_user, fk_id) VALUES (".((int) $this->id).", ".((int) $rd[$i]).")";
 			$result = $this->db->query($sql);
 			if (!$result) {
 				return -1;
@@ -2391,10 +2401,11 @@ class User extends CommonObject
 		if (!empty($user->admin) && empty($user->entity) && $user->id != $this->id) {
 			$sql .= ", entity = ".((int) $this->entity); // entity flag can be set/unset only by an another superadmin user
 		}
-		$sql .= ", default_range = ".($this->default_range > 0 ? $this->default_range : 'null');
-		$sql .= ", default_c_exp_tax_cat = ".($this->default_c_exp_tax_cat > 0 ? $this->default_c_exp_tax_cat : 'null');
-		$sql .= ", fk_warehouse = ".($this->fk_warehouse > 0 ? $this->fk_warehouse : "null");
-		$sql .= ", fk_establishment = ".($this->fk_establishment > 0 ? $this->fk_establishment : "null");
+
+		$sql .= ", default_range = ".($this->default_range > 0 ? ((int) $this->default_range) : 'null');
+		$sql .= ", default_c_exp_tax_cat = ".($this->default_c_exp_tax_cat > 0 ? ((int) $this->default_c_exp_tax_cat) : 'null');
+		$sql .= ", fk_warehouse = ".($this->fk_warehouse > 0 ? ((int) $this->fk_warehouse) : "null");
+		$sql .= ", fk_establishment = ".($this->fk_establishment > 0 ? ((int) $this->fk_establishment) : "null");
 		$sql .= ", lang = ".($this->lang ? "'".$this->db->escape($this->lang)."'" : "null");
 		$sql .= ", force_pass_change = ".($this->force_pass_change ? ((int) $this->force_pass_change) : "0");
 		$sql .= " WHERE rowid = ".((int) $this->id);
@@ -2646,11 +2657,9 @@ class User extends CommonObject
 		} else {
 			if (getDolGlobalString('USER_PASSWORD_GENERATED')) {
 				// Add a check on rules for password syntax using the setup of the password generator
-				$modGeneratePassClass = 'modGeneratePass'.ucfirst(getDolGlobalString('USER_PASSWORD_GENERATED'));
-
-				include_once DOL_DOCUMENT_ROOT.'/core/modules/security/generate/'.$modGeneratePassClass.'.class.php';
-				if (class_exists($modGeneratePassClass)) {
-					$modGeneratePass = new $modGeneratePassClass($this->db, $conf, $langs, $user);
+				require_once DOL_DOCUMENT_ROOT.'/core/modules/security/generate/modules_genpassword.php';
+				$modGeneratePass = ModeleGenPassword::loadAndInstantiate(getDolGlobalString('USER_PASSWORD_GENERATED'), $this->db, $conf, $langs, $user);
+				if ($modGeneratePass) {
 					'@phan-var-force ModeleGenPassword $modGeneratePass';
 
 					// To check an input user password, we disable the cleaning on ambiguous characters (this is used only for auto-generated password)
@@ -2774,13 +2783,62 @@ class User extends CommonObject
 		}
 	}
 
+	/**
+	 * Arm an expiring password-reset token in pass_temp.
+	 *
+	 * Stores 'r:<YYYYMMDDHHMMSS gmt>:<randomsecret>' in pass_temp and returns that
+	 * value so the caller can build the link hash with dolGetPasswordResetHash().
+	 * No password is set until the user confirms via setPassword($user, $chosen, 0).
+	 *
+	 * @param	int		$ttlseconds		Link validity in seconds (0 = USER_PASSWORD_RESET_LINK_VALIDITY, default 3600)
+	 * @return	string|int				Stored pass_temp value, or < 0 on error
+	 */
+	public function requestPasswordReset(int $ttlseconds = 0)
+	{
+		if (empty($ttlseconds)) {
+			$ttlseconds = getDolGlobalInt('USER_PASSWORD_RESET_LINK_VALIDITY', 3600);
+		}
+
+		$secret = getRandomPassword(true);	// generic random, not bound to the user password policy
+		$expiry = dol_print_date(dol_now('gmt') + $ttlseconds, '%Y%m%d%H%M%S', 'gmt');
+		$value = 'r:'.$expiry.':'.$secret;
+
+		$sql = "UPDATE ".$this->db->prefix()."user";
+		$sql .= " SET pass_temp = '".$this->db->escape($value)."'";
+		$sql .= " WHERE rowid = ".((int) $this->id);
+
+		dol_syslog(get_class($this)."::requestPasswordReset", LOG_DEBUG);
+		if ($this->db->query($sql)) {
+			$this->pass_temp = $value;
+			return $value;
+		}
+		$this->error = $this->db->lasterror();
+		return -1;
+	}
+
+	/**
+	 * Build the HTML body of a password-reset LINK email (no password in body).
+	 *
+	 * @param	Translate	$outputlangs	Output language object (already loaded)
+	 * @param	string		$link			Absolute reset link
+	 * @return	string						HTML email body
+	 */
+	public function getPasswordResetEmailContent(Translate $outputlangs, string $link): string
+	{
+		$mesg  = $outputlangs->transnoentitiesnoconv("RequestToResetPasswordReceived")."<br>\n<br>\n";
+		$mesg .= $outputlangs->transnoentitiesnoconv("YouMustClickToChange")." :<br>\n";
+		$mesg .= '<a href="'.dol_escape_htmltag($link).'" rel="noopener">'.$outputlangs->transnoentitiesnoconv("ConfirmPasswordChange").'</a>'."<br>\n<br>\n";
+		$mesg .= $outputlangs->transnoentitiesnoconv("ForgetIfNothing")."<br>\n";
+		return $mesg;
+	}
+
 	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.ScopeNotCamelCaps
 	/**
 	 *  Send a new password (or instructions to reset it) by email
 	 *
 	 *  @param	User	$user           Object user that send the email (not the user we send to) @todo object $user is not used !
 	 *  @param	string	$password       New password
-	 *	@param	int		$changelater	0=Send clear passwod into email, 1=Change password only after clicking on confirm email. @todo Add method 2 = Send link to reset password
+	 *	@param	int		$changelater	Unused, kept for backward-compat: the email is always link-only (no cleartext password is ever sent)
 	 *  @return int 		            Return integer < 0 si erreur, > 0 si ok
 	 */
 	public function send_password($user, $password = '', $changelater = 0)
@@ -2815,44 +2873,19 @@ class User extends CommonObject
 		$urlwithouturlroot = preg_replace('/'.preg_quote(DOL_URL_ROOT, '/').'$/i', '', trim($dolibarr_main_url_root));
 		$urlwithroot = $urlwithouturlroot.DOL_URL_ROOT; // This is to use external domain name found into config file
 
-		if (!$changelater) {
-			$url = $urlwithroot.'/';
-			if (getDolGlobalString('URL_REDIRECTION_AFTER_CHANGEPASSWORD')) {
-				$url = getDolGlobalString('URL_REDIRECTION_AFTER_CHANGEPASSWORD');
-			}
-
-			dol_syslog(get_class($this)."::send_password changelater is off, url=".$url);
-
-			$mesg .= $outputlangs->transnoentitiesnoconv("RequestToResetPasswordReceived")."\n";
-			$mesg .= $outputlangs->transnoentitiesnoconv("NewKeyIs")." :\n\n";
-			$mesg .= $outputlangs->transnoentitiesnoconv("Login")." = ".$this->login."\n";
-			$mesg .= $outputlangs->transnoentitiesnoconv("Password")." = ".$password."\n\n";
-			$mesg .= "\n";
-
-			$mesg .= $outputlangs->transnoentitiesnoconv("ClickHereToGoTo", $appli).': '.$url."\n\n";
-			$mesg .= "--\n";
-			$mesg .= $user->getFullName($outputlangs); // Username that send the email (not the user for who we want to reset password)
-		} else {
-			//print $password.'-'.$this->id.'-'.$conf->file->instance_unique_id;
-			$url = $urlwithroot.'/user/passwordforgotten.php?action=validatenewpassword';
-			$url .= '&username='.urlencode($this->login)."&passworduidhash=".urlencode(dol_hash($password.'-'.$this->id.'-'.$conf->file->instance_unique_id));
-			if (isModEnabled('multicompany')) {
-				$url .= '&entity='.(!empty($this->entity) ? $this->entity : 1);
-			}
-
-			dol_syslog(get_class($this)."::send_password changelater is on, url=".$url);
-
-			$msgishtml = 1;
-
-			$mesg .= $outputlangs->transnoentitiesnoconv("RequestToResetPasswordReceived")."<br>\n";
-			$mesg .= $outputlangs->transnoentitiesnoconv("NewKeyWillBe")." :<br>\n<br>\n";
-			$mesg .= '<strong>'.$outputlangs->transnoentitiesnoconv("Login")."</strong> = ".$this->login."<br>\n";
-			$mesg .= '<strong>'.$outputlangs->transnoentitiesnoconv("Password")."</strong> = ".$password."<br>\n<br>\n";
-			$mesg .= "<br>\n";
-			$mesg .= $outputlangs->transnoentitiesnoconv("YouMustClickToChange")." :<br>\n";
-			$mesg .= '<a href="'.$url.'" rel="noopener">'.$outputlangs->transnoentitiesnoconv("ConfirmPasswordChange").'</a>'."<br>\n<br>\n";
-			$mesg .= $outputlangs->transnoentitiesnoconv("ForgetIfNothing")."<br>\n<br>\n";
+		// Link-only email in every mode: never send a cleartext password (the user chooses it on the reset page).
+		// $password is the armed pass_temp value produced by User::requestPasswordReset().
+		$hash = dolGetPasswordResetHash($password, $this->id);
+		$url = $urlwithroot.'/user/passwordforgotten.php?setnewpassword=1';
+		$url .= '&username='.urlencode($this->login).'&passworduidhash='.urlencode($hash);
+		if (isModEnabled('multicompany')) {
+			$url .= '&entity='.(!empty($this->entity) ? $this->entity : 1);
 		}
+
+		dol_syslog(get_class($this)."::send_password link-only url=".$url);
+
+		$msgishtml = 1;
+		$mesg = $this->getPasswordResetEmailContent($outputlangs, $url);
 
 		$trackid = 'use'.$this->id;
 		$sendcontext = 'passwordreset';
@@ -2950,7 +2983,7 @@ class User extends CommonObject
 
 		$sql = "INSERT INTO ".$this->db->prefix()."user_clicktodial";
 		$sql .= " (fk_user,url,login,pass,poste)";
-		$sql .= " VALUES (".$this->id;
+		$sql .= " VALUES (".((int) $this->id);
 		$sql .= ", '".$this->db->escape($this->clicktodial_url)."'";
 		$sql .= ", '".$this->db->escape($this->clicktodial_login)."'";
 		$sql .= ", '".$this->db->escape($this->clicktodial_password)."'";
@@ -4188,6 +4221,25 @@ class User extends CommonObject
 		return CommonObject::commonReplaceThirdparty($dbs, $origin_id, $dest_id, $tables);
 	}
 
+	/**
+	 *  Function used to replace a contact id with another one when merging two contacts.
+	 *  llx_user.fk_socpeople has a unique key, so the case where both contacts are linked to a user
+	 *  is refused by Contact::mergeContact() before this method is called.
+	 *
+	 *  @param	DoliDB	$dbs		Database handler
+	 *  @param	int		$origin_id	Old contact id (the contact to delete)
+	 *  @param	int		$dest_id	New contact id (the contact that will receive elements of the other)
+	 *  @return	bool				True if success, False if error
+	 */
+	public static function replaceContact(DoliDB $dbs, $origin_id, $dest_id)
+	{
+		if (!CommonObject::commonReplaceContact($dbs, $origin_id, $dest_id, array('user'))) {
+			return false;
+		}
+
+		return CommonObject::commonReplaceContact($dbs, $origin_id, $dest_id, array('user_alert'), 'fk_contact');
+	}
+
 
 	/**
 	 *      Load metrics this->nb for dashboard
@@ -4311,7 +4363,8 @@ class User extends CommonObject
 		global $dolibarr_main_url_root;
 		global $conf;
 
-		$encodedsecurekey = dol_hash($conf->file->instance_unique_id.'uservirtualcard'.$this->id.'-'.$this->login, 'md5');
+		$instanceuniqueid = empty($conf->file->instance_unique_id) ? '' : $conf->file->instance_unique_id;
+		$encodedsecurekey = dol_hash($instanceuniqueid.'uservirtualcard'.$this->id.'-'.$this->login, 'md5');
 		if (isModEnabled('multicompany')) {
 			$entity_qr = '&entity='.((int) $conf->entity);
 		} else {
